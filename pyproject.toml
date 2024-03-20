@@ -1,6 +1,7 @@
 [project]
 name = "globgroups"
 description = """Expands glob groups like foo{bar,baz} -> ["foobar", "foobaz"]"""
+python-version = ">=3.9"
 authors = [
   { name = "Techcable" },
 ]

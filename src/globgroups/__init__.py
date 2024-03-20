@@ -9,11 +9,11 @@ import itertools
 from abc import ABCMeta, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import ClassVar, ForwardRef, Optional, TypeAlias
+from typing import ClassVar, ForwardRef, Optional
 
 from funcparserlib.lexer import LexerError, Token
 from funcparserlib.parser import NoParseError, Parser
-from typing_extensions import Self, final, override
+from typing_extensions import Self, TypeAlias, final, override
 
 from ._version import __version__
 
