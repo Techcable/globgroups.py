@@ -15,6 +15,8 @@ from funcparserlib.lexer import LexerError, Token
 from funcparserlib.parser import NoParseError, Parser
 from typing_extensions import Self, final, override
 
+from ._version import __version__
+
 __all__ = ("GlobExpr", "Literal")
 
 _TokenizerType: TypeAlias = Callable[[str], Iterable[Token]]
