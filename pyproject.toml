@@ -22,7 +22,7 @@ classifiers = [
 
 dependencies = [
     "funcparserlib==1.*",
-    "typing_expansions>=4.4",
+    "typing_extensions>=4.4",
 ]
 
 [project.urls]
