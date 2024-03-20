@@ -1,4 +1,4 @@
-# globgroups [![PyPI - Version](https://img.shields.io/pypi/v/globgroups)](https://pypi.org/projects/globgroups)
+# globgroups [![PyPI - Version](https://img.shields.io/pypi/v/globgroups)](https://pypi.org/project/globgroups)
 Expands glob groups like `foo{bar,baz}` -> `["foobar", "foobaz"]`
 
 Does not (currently) support wildcards like `*.txt`, because those are context-sensitive.
