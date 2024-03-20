@@ -1,123 +1,165 @@
 """
 Expands globs with grouping like foo{bar,baz}
-
-This implementation is not maintained.
-It has been superceeded by the rust implementation.
 """
 
+from __future__ import annotations
+
+import functools
 import itertools
-import os
-import pprint
-import sys
+from abc import ABCMeta, abstractmethod
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import ForwardRef, Iterator, Optional, Sequence, TypeAlias
+from typing import ClassVar, ForwardRef, Optional, TypeAlias
 
-import funcparserlib.lexer as funclex
-from funcparserlib.parser import NoParseError, finished, forward_decl, many, maybe, tok
+from funcparserlib.lexer import LexerError, Token
+from funcparserlib.parser import NoParseError, Parser
+from typing_extensions import Self, final, override
 
-__all__ = ("Glob",)
+__all__ = ("GlobExpr", "Literal")
 
-_TOKENIZER = funclex.make_tokenizer(
-    [
-        funclex.TokenSpec("op", r"[\{\},]"),
-        funclex.TokenSpec("word", r"[^\{\},]+"),
-    ]
-)
-
-GlobGroup = ForwardRef("GlobGroup")
-GlobExpr: TypeAlias = str | GlobGroup
+_TokenizerType: TypeAlias = Callable[[str], Iterable[Token]]
 
 
-def _expand_expr(expr: GlobExpr) -> Iterator[str]:
-    match expr:
-        case str(word):
-            yield word
-        case GlobGroup(prefix, children, suffix):
-            suffixes = list(_expand_expr(suffix))
-            for child in children:
-                for child_expansion in _expand_expr(child):
-                    for suffix_expansion in suffixes:
-                        yield prefix + child_expansion + suffix_expansion
-        case other:
-            raise TypeError(type(other))
+class GlobExpr(metaclass=ABCMeta):
+    _PARSER: ClassVar[Optional[Parser[Token, GlobExpr]]] = None
+    _TOKENIZER: ClassVar[Optional[_TokenizerType]] = None
+
+    def expand(self) -> list[str]:
+        """Expand the glob expression"""
+        return list(self._expand_iter())
+
+    @abstractmethod
+    def equivalent_expr(self) -> str:
+        """
+        Create an expression which is semantically equivalent to this glob
+
+        Not necessarily exactly equal to the original expression.
+        """
+
+    @abstractmethod
+    def _expand_iter(self) -> Iterator[str]:
+        """An iterator over the expansion of self"""
+
+    @classmethod
+    def _init_parser(cls) -> Parser[Token, GlobExpr]:
+        from ._parse import whole_expr
+
+        return whole_expr
+
+    @classmethod
+    def parse(cls, text: str) -> GlobExpr:
+        if not text:
+            return Literal.EMPTY
+        if (parser := cls._PARSER) is None:
+            parser = cls._PARSER = cls._init_parser()
+        if (tokenizer := GlobExpr._TOKENIZER) is None:
+            from . import _parse
+
+            tokenizer = GlobExpr._TOKENIZER = _parse.TOKENIZER
+        try:
+            return parser.parse(list(tokenizer(text)))
+        except (LexerError, NoParseError):
+            raise GlobParseError(f"Failed to parse {cls.__name__}: {text!r}")
+
+    def __repr__(self) -> str:
+        return f"GlobExpr.parse({self.equivalent_expr()!r})"
+
+
+@dataclass(frozen=True)
+class Literal(GlobExpr):
+    """A literal glob expression, that expands to its textual value"""
+
+    text: str
+
+    _SPECIAL_CHARS: ClassVar[tuple[str, ...]] = ("{", "}", ",", "\\")
+    EMPTY: ClassVar[Literal]
+
+    @override
+    def expand(self) -> list[str]:
+        return [self.text]
+
+    @override
+    def equivalent_expr(self) -> str:
+        res = []
+        for c in self.text:
+            if c in Literal._SPECIAL_CHARS:
+                res.append("\\")
+            res.append(c)
+        return "".join(res)
+
+    @staticmethod
+    def escape(text: str) -> str:
+        """
+        Escape any special characters in the text
+
+        The result can be successfully parsed as a glob Literal.
+        """
+        return Literal(text).equivalent_expr()
+
+    @override
+    @classmethod
+    def parse(cls, text: str) -> Literal:
+        res = super().parse(text)
+        assert isinstance(res, Literal)
+        return res
+
+    @override
+    def _expand_iter(self) -> Iterator[str]:
+        yield self.text
+
+    @override
+    @classmethod
+    def _init_parser(cls) -> Parser[Token, GlobExpr]:
+        from ._parse import whole_literal
+
+        return whole_literal
+
+    @staticmethod
+    def _process_parse(txt: Optional[list[str]]) -> Literal:
+        return Literal("".join(txt)) if txt is not None else Literal.EMPTY
+
+    @override
+    def __repr__(self) -> str:
+        return f"Literal({self.text!r})"
+
+
+Literal.EMPTY = Literal("")
 
 
 class GlobParseError(ValueError):
-    pass
+    """An error that occurs parsing a GlobExpr"""
 
 
 @dataclass
-class Glob:
-    _expr: GlobExpr
+class _GlobGroup(GlobExpr):
+    """
+    A glob group prefix{child1,child2}suffix
 
-    @staticmethod
-    def parse(text: str) -> "Glob":
-        if not text:
-            return Glob("")
-        try:
-            return _whole_expr.parse(list(_TOKENIZER(text)))
-        except (funclex.LexerError, NoParseError):
-            raise ValueError(f"Failed to parse glob: {text!r}")
+    This type is an implementation detail.
+    """
 
-    def expand(self) -> list[str]:
-        return list(_expand_expr(self._expr))
-
-    def __str__(self):
-        return str(self._expr)
-
-
-@dataclass
-class GlobGroup:
-    _prefix: str
+    _prefix: Literal
     _children: list[GlobExpr]
     _suffix: GlobExpr
 
-    def expand(self) -> list[str]:
-        return list(_expand_expr(self))
+    def __post_init__(self):
+        assert isinstance(self._prefix, Literal), "Prefix must be literal"
+        assert self._children, "Empty children"
 
-    @staticmethod
-    def _process_parse(
-        parts: tuple[
-            Optional[str], tuple[GlobExpr, Sequence[GlobExpr]], Optional[GlobExpr]
-        ]
-    ) -> GlobGroup:
-        prefix, (first_child, children), suffix = parts
-        return GlobGroup(prefix or "", [first_child, *children], suffix or "")
+    @override
+    def _expand_iter(self) -> Iterator[str]:
+        suffixes: list[str] = self._suffix.expand()
+        for child in self._children:
+            for child_expansion in child._expand_iter():
+                for suffix_expansion in suffixes:
+                    yield self._prefix.text + child_expansion + suffix_expansion
 
-    def __str__(self):
-        parts = [self.prefix]
-        if self.children:
+    @override
+    def equivalent_expr(self) -> str:
+        parts = [self._prefix.equivalent_expr()]
+        if self._children:
             parts.append("{")
-            parts.extend(",".join(map(str, self.children)))
+            parts.extend(",".join(child.equivalent_expr() for child in self._children))
             parts.append("}")
-        parts.append(str(self.suffix))
+        parts.append(self._suffix.equivalent_expr())
         return "".join(parts)
-
-
-_expr = forward_decl()
-_word = tok("word")
-_group = (
-    maybe(_word)
-    + (  # prefix
-        -tok("op", "{")
-        + (maybe(_expr) + many(-tok("op", ",") + maybe(_expr)))
-        + -tok("op", "}")
-    )
-    + maybe(_expr)
-) >> GlobGroup._process_parse
-_expr.define(_group | _word)
-_whole_expr = _expr + -finished
-
-if __name__ == "__main__":
-    if len(args := sys.argv) != 2:
-        print("Expected only one argument", file=sys.stderr)
-        exit(1)
-
-    glob = sys.argv[1]
-    expr = Glob.parse(glob)
-    if os.getenv("DEBUG") == "globparse":
-        pprint.print(expr)
-        print()
-        print()
-    for expand in expr.expand():
-        print(expand)

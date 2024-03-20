@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from globgroups import Glob
+from globgroups import GlobExpr
 
 
 @dataclass
@@ -30,5 +30,14 @@ TEST_DATA: list[GlobTest] = [
     [(test.expression, test.expected_expansions) for test in TEST_DATA],
 )
 def test_expansions(expression: str, expected_expansions: str):
-    glob = Glob.parse(expression)
+    glob = GlobExpr.parse(expression)
     assert glob.expand() == expected_expansions
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [test.expression for test in TEST_DATA],
+)
+def test_roundtrip(expression: str):
+    glob = GlobExpr.parse(expression)
+    assert glob.equivalent_expr() == expression

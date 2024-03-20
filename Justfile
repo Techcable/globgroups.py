@@ -9,11 +9,11 @@ test: mypy && check-format
 
 mypy:
     mypy src
-    mypy tests
+    PYTHONPATH=src mypy tests
 
 # runs tests without anything else
 _test:
-    pytest tests
+    PYTHONPATH=src pytest tests
 
 # Checks for formatting issues
 check-format: (format "--check")
